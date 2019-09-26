@@ -75,7 +75,7 @@ int login(int conn_fd){
 
 int menu_user(int conn_fd){
 	printf("1. Book Ticket\n2. View Booking History\n3. Cancel Booking\n4. Exit\n\n");
-	int choice;
+	int choice;int option;
 	scanf("%d",&choice);
     	switch(choice){
     		case 1:
@@ -85,8 +85,9 @@ int menu_user(int conn_fd){
     		case 3:
     			break;
     		case 4:
-    			if(write(conn_fd, &choice, sizeof(int)) == -1)	ERR_EXIT("write()");
-    			//if(write(conn_fd, &CURRENT_USER, 1*sizeof(struct_customer)) == -1)	ERR_EXIT("write()");
+    			option=htonl(choice);
+    			if(write(conn_fd, &option, sizeof(int)) == -1)	ERR_EXIT("write()");
+    			if(write(conn_fd, &CURRENT_USER, 1*sizeof(struct_customer)) == -1)	ERR_EXIT("write()");
     			close(conn_fd);
     			return 0;
     		default:
@@ -97,26 +98,128 @@ int menu_user(int conn_fd){
     return 1;
 }
 
+struct_customer get_customer(){
+	printf("Inside get_customer\n");
+	struct_customer new;
+	printf("Enter account type(0 for ADMIN, 1 for NORMAL, 2 for AGENT) : ");
+	scanf("%d",&new.type);
+	printf("Enter username :");
+	scanf("%s",new.cust_username);
+	printf("Enter password :");
+	scanf("%s",new.cust_password);
+	new.status=NORMAL;
+	return new;
+}
+
+void display_customer(struct_customer customer){
+	printf(" \t%d\t \t%d\t \t%s\t\t \t%s\t\t \t%d\n",customer.acc_no,customer.type,customer.cust_username,customer.cust_password,customer.status);
+}
+
+void add_customer(int conn_fd){
+	//printf("Inside add_customer\n");  //DELETE
+	struct_customer new=get_customer();struct_customer response;
+	if(write(conn_fd, &new, 1*sizeof(struct_customer)) == -1)	ERR_EXIT("write()");
+	if(read(conn_fd, &response, sizeof(struct_customer))==-1)	ERR_EXIT("read()");
+	printf("User has been added with following details:\n\n");
+	printf("      Account No |    Account Type |    Account Username   |  Account Password   \t|    Account Status \t\n");
+	display_customer(response);	
+}
+
+void show_all_customer(int conn_fd){
+	struct_customer response;int moreflg;
+	if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+	moreflg=ntohl(moreflg);
+	printf("      Account No |    Account Type |    Account Username   |  Account Password   \t|    Account Status \t\n");
+	while(moreflg){
+		if(read(conn_fd, &response, sizeof(struct_customer))==-1)	ERR_EXIT("read()");
+		display_customer(response);
+		if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+		moreflg=ntohl(moreflg);
+	}
+}
+
+void search_user(int conn_fd){
+	int accno;struct_customer response;int presentflg=0;
+
+	printf("Enter Account no: ");
+	scanf("%d",&accno);
+	accno=htonl(accno);
+	if(write(conn_fd, &accno, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+
+	if(read(conn_fd, &presentflg, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+	
+	presentflg=ntohl(presentflg);
+	if(presentflg){
+		if(read(conn_fd, &response, sizeof(struct_customer))==-1)	ERR_EXIT("read()");
+		printf("      Account No |    Account Type |    Account Username   |  Account Password   \t|    Account Status \t\n");
+		display_customer(response);
+		return;
+	}
+
+	printf("No such record with this account no!!\n\n");
+}
+
+void delete_user(int conn_fd){
+	int accno;struct_customer response;int presentflg=0;
+
+	printf("Enter Account no: ");
+	scanf("%d",&accno);
+	accno=htonl(accno);
+	if(write(conn_fd, &accno, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+
+	if(read(conn_fd, &presentflg, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+	
+	presentflg=ntohl(presentflg);
+	if(presentflg){
+		printf("Account has been deleted.\n\n");
+		return;
+	}
+
+	printf("No such record with this account no!!\n\n");	
+}
 
 int menu_admin(int conn_fd){
-	printf("1. Add User\n2. Search User \n3. Delete User\n4. Add Train\n5. Search Train \n6. Delete Train\n7. Exit\n\n");
-	int choice;
+	printf("1. Add User\n2. Search User \n3. Delete User\n4. View Users\n");
+	printf("5. Add Train\n6. Search Train \n7. Delete Train\n8. View Trains\n9. Exit\n\n");
+	int choice;int option;
 	scanf("%d",&choice);
     switch(choice){
     	case 1:
+    		option=htonl(choice+4);
+    		/*printf("conn_fd: %d\n",conn_fd); //DELETE
+    		printf("Inside case 1\n");*/
+			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");    		
+    		add_customer(conn_fd);
     		break;
    		case 2:
+   			option=htonl(choice+4);
+   			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+   			search_user(conn_fd);
    			break;
    		case 3:
+   			option=htonl(choice+4);
+   			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+   			delete_user(conn_fd);
+   			break;
    			break;
     	case 4:
+    		option=htonl(choice+4);
+    		/*printf("conn_fd: %d\n",conn_fd); //DELETE
+    		printf("Inside case 1\n");*/
+			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+			show_all_customer(conn_fd);
     		break;
     	case 5:
     		break;
     	case 6:
     		break;
     	case 7:
-    		if(write(conn_fd, &choice, sizeof(int)) == -1)	ERR_EXIT("write()");
+    		break;
+    	case 8:
+    		break;
+    	case 9:
+    		option=htonl(choice+4);
+    		if(write(conn_fd, &option, sizeof(int)) == -1)	ERR_EXIT("write()");
     		close(conn_fd);
    			return 0; 			
     	default:
@@ -124,7 +227,10 @@ int menu_admin(int conn_fd){
     		sleep(2);
     		break;
     	}
-    return 1;
+
+    printf("\nPress enter to get back to main menu\n");
+    getchar();getchar();
+    return 2;
 }
 
 int main(int argc,char* argv[])
@@ -145,7 +251,7 @@ int main(int argc,char* argv[])
         ERR_EXIT("inet_pton()"); 
     if(connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
         ERR_EXIT("connect()");
-
+    printf("conn_fd: %d\n",socket_fd);
     response_flg=login(socket_fd);
     if(response_flg==0){
     	if(write(socket_fd, &choice, sizeof(int)) == -1)	ERR_EXIT("write()");	

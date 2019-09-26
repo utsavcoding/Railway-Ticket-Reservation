@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+
 
 /* Length of variable*/
 #define PASSWORD_LEN 16
@@ -20,6 +23,8 @@
 #define AGENT_ACC_TYPE 2
 #define NORMAL 1
 #define CANCEL 0
+#define S_ADD_CUSTOMER 0
+#define S_DEL_CUSTOMER 1
 
 void ERR_EXIT(const char * msg) {perror(msg);exit(EXIT_FAILURE);}
 
@@ -31,52 +36,107 @@ typedef struct customer{
     int status;
 }struct_customer;
 
-struct flock get_writelock_customer(int start){
-	struct flock lock;
-	lock.l_start = start*sizeof(struct_customer);
-	lock.l_len = sizeof(struct_customer);
-	lock.l_pid = 
-	lock.l_type = F_WRLCK;
-	lock.l_whence = SEEK_SET;
-	return lock;
+typedef union semun
+{
+    int val;
+    struct semid_ds *buf;
+    unsigned short int *array;
+}struct_semap;
+
+static int NO_OF_SEMAPHORE=10;static int G_SEMID=0;
+
+static int LOGGED_IN_USER[MAX_CUSTOMER];static int LOGGED_IN_COUNT=0;
+
+/*struct flock get_writelock_customer(int start){
+    struct flock lock;
+    lock.l_start = start*sizeof(struct_customer);
+    lock.l_len = sizeof(struct_customer);
+    lock.l_pid = 
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    return lock;
+}*/
+
+/* Prepares the semaphore set and sets the semaphore setid in a global variable
+*/
+void init_semaphore_set(){
+    int semid, semflag = 0644 | IPC_CREAT | IPC_EXCL;
+    key_t key;
+    if((key = ftok(".", (int)'s')) == (key_t)-1)
+        ERR_EXIT("ftok()");
+    if((semid = semget(key, NO_OF_SEMAPHORE , semflag)) == -1){
+        if((semid = semget(key, NO_OF_SEMAPHORE, 0)) == -1)
+                ERR_EXIT("semget()");
+    }
+    G_SEMID=semid;
+
+    struct_semap arg;arg.val=1;
+    if(semctl(G_SEMID, S_ADD_CUSTOMER, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+    if(semctl(G_SEMID, S_DEL_CUSTOMER, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+}
+
+/* Holding the semaphore*/
+void wait(int semaphore_no){
+    struct sembuf buf;buf.sem_num = semaphore_no;buf.sem_op = -1;
+    buf.sem_flg = 0 | SEM_UNDO;//here sem_flg 0 represents, process will wait until the critical section is available
+    size_t no_of_sembufs = 1;
+    if(semop(G_SEMID, &buf, no_of_sembufs) == -1) ERR_EXIT("semop()");
+}
+
+/* Releasing the semaphore*/
+void release(int semaphore_no){
+    struct sembuf buf;buf.sem_num = semaphore_no;buf.sem_op = 1;
+    buf.sem_flg = 0 | SEM_UNDO;//here sem_flg 0 represents, process will wait until the critical section is available
+    size_t no_of_sembufs = 1;
+    if(semop(G_SEMID, &buf, no_of_sembufs) == -1) ERR_EXIT("semop()");   
+}
+
+/* check for already logged in normal users
+   @return -1 if not logged in, index if logged in already
+*/
+int check_for_logged(int acc_no){
+    for(int i=0;i<LOGGED_IN_COUNT;i++){
+        printf("array: %d accno: %d",LOGGED_IN_USER[i],acc_no);
+        if(LOGGED_IN_USER[i]==acc_no){
+            return i;
+        }
+    }
+    return -1;
 }
 
 int compare_struct_customer(struct_customer actual,struct_customer input){
-    if(strcmp(actual.cust_password,input.cust_password)==0 && strcmp(actual.cust_username,input.cust_username)==0
+    if(actual.status==NORMAL && strcmp(actual.cust_password,input.cust_password)==0 && strcmp(actual.cust_username,input.cust_username)==0
         && strcmp(actual.cust_password,input.cust_password)==0)
         return 1;
     return 0;
 }
 
 
-/*	Implementation of authenticate functionality.
-	@return
+/*  Implementation of authenticate functionality.
+    @return
     0 on failure, 
     1 on success for NORMAL/AGENT account,
-    2 on success for ADMIN ACCOUNT.
+    2 on success for ADMIN ACCOUNT
+    3 on already logged in.
 */
 int authenticate(int conn_fd){
     struct_customer input;int fd;   
 
     if(read(conn_fd, &input, 1*sizeof(struct_customer)) == -1) ERR_EXIT("read()");
 
-    //printf("%d %s %s\n",input.cust_no,input.cust_username,input.cust_password);   //DELETE
+    printf("%d %s %s\n",input.acc_no,input.cust_username,input.cust_password);   //DELETE
 
+    if(check_for_logged(input.acc_no)!=-1){
+        return 3;
+    }
     if((fd = open("customer", O_RDONLY))==-1)   ERR_EXIT("open()");
 
-    printf("Before acquiring write lock...\n");
-    struct flock lock=get_writelock_customer(input.acc_no-1);
-    fcntl(fd, F_SETLKW, &lock);
-    printf("Locking the %d record to update\n",input.acc_no);
-    
     lseek(fd, (input.acc_no-1)*sizeof(struct_customer), SEEK_SET);
     struct_customer actual_cust;
     read(fd,&actual_cust,1*sizeof(struct_customer));
     if(compare_struct_customer(actual_cust,input)){
-        if(actual_cust.type==ADMIN_ACC_TYPE || actual_cust.type==AGENT_ACC_TYPE ){
-            lock.l_type = F_UNLCK;
-            fcntl(fd, F_SETLKW, &lock);
-            printf("Lock Released\n");
+        if(actual_cust.type==NORMAL_ACC_TYPE ){
+            LOGGED_IN_USER[LOGGED_IN_COUNT++]=actual_cust.acc_no;
         }
         if(actual_cust.type==ADMIN_ACC_TYPE){
             return 2;
@@ -84,17 +144,108 @@ int authenticate(int conn_fd){
             return 1;
         }
     }
-    /*struct_customer actual_cust;
-    while(read(fd,&actual_cust,1*sizeof(struct_customer))){
-        if(compare_struct_customer(actual_cust,input))
-        {
-            if(close(fd)==-1) ERR_EXIT("close()");
-            return 1;
-        }
-    }*/
 
-	if(close(fd)==-1) ERR_EXIT("close()");
+    if(close(fd)==-1) ERR_EXIT("close()");
     return 0;
+}
+
+void release_logged_in_user(int conn_fd){
+    struct_customer exiting_user;
+    if(read(conn_fd, &exiting_user, sizeof(struct_customer)) == -1) ERR_EXIT("read()");
+    int index;
+    if((index=check_for_logged(exiting_user.acc_no))!=-1){
+        for(int i=index;i<LOGGED_IN_COUNT-1;i++){
+            LOGGED_IN_USER[i]= LOGGED_IN_USER[i+1];
+        }
+        LOGGED_IN_COUNT--;
+    }
+}
+
+struct_customer add_customer(int conn_fd){
+    struct_customer new;int fd;
+    if(read(conn_fd, &new, 1*sizeof(struct_customer)) == -1) ERR_EXIT("read()");
+
+    printf("Before entering into critical section.\n");
+    printf("Waiting for lock...\n");
+    wait(S_ADD_CUSTOMER);
+
+    if((fd = open("customer", O_RDWR))==-1)   ERR_EXIT("open()");    
+    lseek(fd, -1*sizeof(struct_customer), SEEK_END);
+    struct_customer last;
+    if(read(fd, &last, 1*sizeof(struct_customer)) == -1) ERR_EXIT("read()");
+    new.acc_no=last.acc_no+1;
+    write(fd, &new, 1*sizeof(new));
+
+    printf("Inside critical section.\n");
+
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file    
+
+    release(S_ADD_CUSTOMER);
+    return new;
+}
+
+void show_all_customer(int conn_fd){
+    int moreflg=htonl(1);int fd;
+    
+    if((fd = open("customer", O_RDONLY))==-1)   ERR_EXIT("open()");    
+    struct_customer actual_cust;
+    while(read(fd,&actual_cust,1*sizeof(struct_customer))){
+        if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");
+        if(write(conn_fd, &actual_cust, sizeof(struct_customer)) == -1) ERR_EXIT("write()");
+    }
+    moreflg=htonl(0);
+    if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");        
+        
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void search_user(int conn_fd){
+    int  accno;int presentflg=0;int fd;
+    if(read(conn_fd, &accno, sizeof(int)) == -1) ERR_EXIT("write()");
+    accno=ntohl(accno);
+    if((fd = open("customer", O_RDONLY))==-1)   ERR_EXIT("open()");    
+
+    struct_customer actual_cust;
+    while(read(fd,&actual_cust,1*sizeof(struct_customer))){
+        if(actual_cust.acc_no==accno && actual_cust.status==NORMAL){
+            presentflg=1;
+            presentflg=htonl(presentflg);
+            if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+            if(write(conn_fd, &actual_cust, sizeof(struct_customer)) == -1) ERR_EXIT("write()");
+            if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+            return;       
+        }
+    }
+    presentflg=htonl(presentflg);
+    if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void delete_user(int conn_fd){
+    int  accno;int presentflg=0;int fd;
+    if(read(conn_fd, &accno, sizeof(int)) == -1) ERR_EXIT("write()");
+    accno=ntohl(accno);
+    printf("Before entering into critical section.\n");
+    printf("Waiting for lock...\n");
+    wait(S_DEL_CUSTOMER);
+    printf("Inside critical section.\n");
+
+    if((fd = open("customer", O_RDWR))==-1)   ERR_EXIT("open()"); 
+    struct_customer actual_cust;
+    while(read(fd,&actual_cust,1*sizeof(struct_customer))){
+        if(actual_cust.acc_no==accno && actual_cust.status==NORMAL){
+            presentflg=1;
+            lseek(fd, -1*sizeof(struct_customer), SEEK_CUR);
+            actual_cust.status=CANCEL;
+            write(fd, &actual_cust, 1*sizeof(struct_customer));            
+            break;
+        }
+    }
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file
+    release(S_DEL_CUSTOMER);
+    printf("Lock Released\n");
+    presentflg=htonl(presentflg);
+    if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
 }
 
 
@@ -106,30 +257,33 @@ void * service(void * fd)
         int option;
         if(read(conn_fd, &option, sizeof(option)) == -1) ERR_EXIT("read()");
         option = ntohl(option);
+        printf("option from client:%d\n",option);
         if(option == 0){    //login
             printf("Inside option 0\n");
             int ret=authenticate(conn_fd);
             printf("ret: %d\n",ret);
             if(write(conn_fd, &ret, sizeof(ret)) == -1) ERR_EXIT("write()");
+        }else if(option==5){
+            printf("Inside option 5\n");
+            struct_customer new=add_customer(conn_fd);
+            if(write(conn_fd, &new, sizeof(struct_customer)) == -1) ERR_EXIT("write()");
+        }else if(option==6){
+            printf("Inside option 6\n");
+            search_user(conn_fd);
+        }else if(option==7){
+            printf("Inside option 7\n");
+            delete_user(conn_fd);
+        }else if(option==8){
+            printf("Inside option 8\n");
+            show_all_customer(conn_fd);
+        }else if(option==13){
+            break;
         }else{
+            release_logged_in_user(conn_fd);
             break;
         }
+        //sleep(2); //DELETE
     }
-
-    /*int size;
-    if(read(fd, &size, sizeof(size)) == -1) ERR_EXIT("read()");
-    size = ntohl(size);
-    int sum = htonl(0), var;
-    for (int i = 0; i < size; ++i)
-    {
-        if(read(fd, &var, sizeof(int)) == -1) ERR_EXIT("read()");
-        sum += ntohl(var);
-        printf("fd: %d size: %d sum:%d\n",fd,size,sum);
-    }
-    sum = htonl(sum);
-    printf("\nAddition of numbers completed\n");
-    if(write(fd, &sum, sizeof(sum)) == -1) ERR_EXIT("write()");
-    if(close(fd) == -1) ERR_EXIT("close()");*/
 
     if(close(conn_fd) == -1) ERR_EXIT("close()");
 }
@@ -152,6 +306,7 @@ int main(int argc,char* argv[])
     
     if(listen(socket_fd, 10) == -1) ERR_EXIT("listen()");
 
+    init_semaphore_set();
     pthread_t th[5];
     int i=0;
     while(1)
@@ -211,3 +366,28 @@ struct_session_customer get_customer_info(char ip_user[],char ip_pwd[]){
         if(strcmp(user,ip_user)==0 && strm)
     }
 }*/
+
+
+/*struct_customer actual_cust;
+    while(read(fd,&actual_cust,1*sizeof(struct_customer))){
+        if(compare_struct_customer(actual_cust,input))
+        {
+            if(close(fd)==-1) ERR_EXIT("close()");
+            return 1;
+        }
+    }*/
+
+/*int size;
+    if(read(fd, &size, sizeof(size)) == -1) ERR_EXIT("read()");
+    size = ntohl(size);
+    int sum = htonl(0), var;
+    for (int i = 0; i < size; ++i)
+    {
+        if(read(fd, &var, sizeof(int)) == -1) ERR_EXIT("read()");
+        sum += ntohl(var);
+        printf("fd: %d size: %d sum:%d\n",fd,size,sum);
+    }
+    sum = htonl(sum);
+    printf("\nAddition of numbers completed\n");
+    if(write(fd, &sum, sizeof(sum)) == -1) ERR_EXIT("write()");
+    if(close(fd) == -1) ERR_EXIT("close()");*/
