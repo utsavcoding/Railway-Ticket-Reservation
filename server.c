@@ -17,6 +17,7 @@
 #define PASSWORD_LEN 16
 #define USERNAME_LEN 20
 #define TRNAME_LEN 30
+#define TRAVELLER_LEN 20
 #define PORT_NO 5000
 #define MAX_CUSTOMER 1000
 #define ADMIN_ACC_TYPE 0
@@ -28,6 +29,8 @@
 #define S_DEL_CUSTOMER 1
 #define S_ADD_TRAIN 2
 #define S_DEL_TRAIN 3
+#define S_MOD_TRAIN 4
+#define S_BOOK_TICKET 5
 
 
 void ERR_EXIT(const char * msg) {perror(msg);exit(EXIT_FAILURE);}
@@ -48,6 +51,16 @@ typedef struct train{
     int status;
 }struct_train;
 
+typedef struct booking{
+    int book_no;
+    int trn_no;
+    int acc_no;
+    char name[TRAVELLER_LEN];
+    int age;
+    int seats;
+    int status;
+}struct_booking;
+
 typedef union semun
 {
     int val;
@@ -59,15 +72,6 @@ static int NO_OF_SEMAPHORE=10;static int G_SEMID=0;
 
 static int LOGGED_IN_USER[MAX_CUSTOMER];static int LOGGED_IN_COUNT=0;
 
-/*struct flock get_writelock_customer(int start){
-    struct flock lock;
-    lock.l_start = start*sizeof(struct_customer);
-    lock.l_len = sizeof(struct_customer);
-    lock.l_pid = 
-    lock.l_type = F_WRLCK;
-    lock.l_whence = SEEK_SET;
-    return lock;
-}*/
 
 /* Prepares the semaphore set and sets the semaphore setid in a global variable
 */
@@ -87,6 +91,8 @@ void init_semaphore_set(){
     if(semctl(G_SEMID, S_DEL_CUSTOMER, SETVAL, arg) == -1) ERR_EXIT("semctl()");
     if(semctl(G_SEMID, S_ADD_TRAIN, SETVAL, arg) == -1) ERR_EXIT("semctl()");
     if(semctl(G_SEMID, S_DEL_TRAIN, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+    if(semctl(G_SEMID, S_MOD_TRAIN, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+    if(semctl(G_SEMID, S_BOOK_TICKET, SETVAL, arg) == -1) ERR_EXIT("semctl()");
 }
 
 /* Holding the semaphore*/
@@ -174,6 +180,107 @@ void release_logged_in_user(int conn_fd){
         LOGGED_IN_COUNT--;
     }
 }
+
+void modify_train(int trn_no,int booked_seats){
+    wait(S_MOD_TRAIN);
+    int fd;
+    if((fd = open("train", O_RDWR))==-1)   ERR_EXIT("open()");
+    struct_train actual_trn;
+    lseek(fd,(trn_no-1)*(sizeof(struct_train)),SEEK_SET);
+    read(fd,&actual_trn,1*sizeof(struct_train));
+    lseek(fd,-1*sizeof(struct_train),SEEK_CUR);
+
+    actual_trn.trn_avl_seats-=booked_seats;
+    actual_trn.trn_book_seats+=booked_seats;
+    
+    write(fd,&actual_trn,1*sizeof(struct_train));
+    release(S_MOD_TRAIN);
+}
+
+void show_all_train(int conn_fd){
+    int moreflg=htonl(1);int fd;
+    
+    if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");    
+    struct_train actual_trn;
+    while(read(fd,&actual_trn,1*sizeof(struct_train))){
+        if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");
+        if(write(conn_fd, &actual_trn, sizeof(struct_train)) == -1) ERR_EXIT("write()");
+    }
+    moreflg=htonl(0);
+    if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");        
+        
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void show_all_booking(int conn_fd){
+    int moreflg=htonl(1);int fd;int acc_no;
+    
+    if(read(conn_fd, &acc_no, 1*sizeof(int)) == -1) ERR_EXIT("read()");
+    char filename[10], accno[4];
+    sprintf(accno, "%d", acc_no);
+    strcpy(filename,accno);strcat(filename,"bh");
+
+    if((fd = open(filename, O_RDONLY))==-1)   ERR_EXIT("open()");    
+    struct_booking actual_book;
+    while(read(fd,&actual_book,1*sizeof(struct_booking))){
+        if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");
+        if(write(conn_fd, &actual_book, sizeof(struct_booking)) == -1) ERR_EXIT("write()");
+    }
+    moreflg=htonl(0);
+    if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");        
+        
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void book_ticket(int conn_fd){
+    show_all_train(conn_fd);
+    struct_booking new;
+    int presentflg=0;int fd;
+    if(read(conn_fd, &new, 1*sizeof(struct_booking)) == -1) ERR_EXIT("read()");
+
+    if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");
+
+    struct_train actual_trn;
+    lseek(fd,(new.trn_no-1)*(sizeof(struct_train)),SEEK_SET);
+    read(fd,&actual_trn,1*sizeof(struct_train));
+    if(actual_trn.trn_no==new.trn_no && actual_trn.status==NORMAL && actual_trn.trn_avl_seats>=new.seats){
+        presentflg=1;
+        presentflg=htonl(presentflg);
+        modify_train(actual_trn.trn_no,new.seats);
+    }
+
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file 
+    
+    presentflg=htonl(presentflg);
+    if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+                    
+    if(presentflg){
+        wait(S_BOOK_TICKET);
+
+        char filename[10], accno[4];int bookfd;
+        sprintf(accno, "%d", new.acc_no);
+        strcpy(filename,accno);strcat(filename,"bh");
+        if((bookfd = open(filename, O_RDWR | O_CREAT, 0744))==-1)   ERR_EXIT("open()");
+
+        int size=lseek(bookfd,0,SEEK_END);
+        if(size==0){
+            new.book_no=1;
+        }else{
+            struct_booking last;
+            lseek(bookfd,-1*sizeof(struct_booking),SEEK_END);
+            read(bookfd,&last,sizeof(struct_booking));
+            new.book_no=last.book_no+1;
+        }
+        new.status=NORMAL;
+
+        lseek(bookfd,0,SEEK_END);
+        write(bookfd,&new,sizeof(struct_booking));
+
+        if(write(conn_fd, &new, sizeof(struct_booking)) == -1) ERR_EXIT("write()");
+        release(S_BOOK_TICKET);   
+    }
+}
+
 
 struct_customer add_customer(int conn_fd){
     struct_customer new;int fd;
@@ -285,21 +392,6 @@ struct_train add_train(int conn_fd){
     return new;
 }
 
-void show_all_train(int conn_fd){
-    int moreflg=htonl(1);int fd;
-    
-    if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");    
-    struct_train actual_trn;
-    while(read(fd,&actual_trn,1*sizeof(struct_train))){
-        if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");
-        if(write(conn_fd, &actual_trn, sizeof(struct_train)) == -1) ERR_EXIT("write()");
-    }
-    moreflg=htonl(0);
-    if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");        
-        
-    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
-}
-
 void search_train(int conn_fd){
     int trn_no;int presentflg=0;int fd;
     if(read(conn_fd, &trn_no, sizeof(int)) == -1) ERR_EXIT("write()");
@@ -364,6 +456,12 @@ void * service(void * fd)
             int ret=authenticate(conn_fd);
             printf("ret: %d\n",ret);
             if(write(conn_fd, &ret, sizeof(ret)) == -1) ERR_EXIT("write()");
+        }else if(option==1){
+            printf("Inside option 1\n");
+            book_ticket(conn_fd);
+        }else if(option==2){
+            printf("Inside option 2\n");
+            show_all_booking(conn_fd);
         }else if(option==5){
             printf("Inside option 5\n");
             struct_customer new=add_customer(conn_fd);

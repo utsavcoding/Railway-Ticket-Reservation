@@ -13,6 +13,7 @@
 #define PASSWORD_LEN 16
 #define USERNAME_LEN 20
 #define TRNAME_LEN 30
+#define TRAVELLER_LEN 20
 #define PORT_NO 5000
 #define ADMIN_ACC_TYPE 0
 #define NORMAL_ACC_TYPE 1
@@ -37,6 +38,16 @@ typedef struct train{
 	int trn_book_seats;
 	int status;
 }struct_train;
+
+typedef struct booking{
+    int book_no;
+    int trn_no;
+    int acc_no;
+    char name[TRAVELLER_LEN];
+    int age;
+    int seats;
+    int status;
+}struct_booking;
 
 static struct_customer CURRENT_USER;
 
@@ -82,14 +93,87 @@ int login(int conn_fd){
     return 0;
 }
 
+void display_train(struct_train train){
+	printf(" \t%d \t%s\t \t%d\t\t \t%d\t \t%d\n",train.trn_no,train.trn_name,train.trn_avl_seats,train.trn_book_seats,train.status);
+}
+
+void show_all_train(int conn_fd){
+	struct_train response;int moreflg;
+	if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+	moreflg=ntohl(moreflg);
+	printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
+	while(moreflg){
+		if(read(conn_fd, &response, sizeof(struct_train))==-1)	ERR_EXIT("read()");
+		display_train(response);
+		if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+		moreflg=ntohl(moreflg);
+	}
+}
+
+void display_booking(struct_booking booking){
+	printf("\t%d\t\t%d\t\t%d\t%s\t   %d\t\t %d\t %d\n",booking.book_no,booking.acc_no,booking.trn_no,booking.name,booking.age,booking.seats,booking.status);
+}
+
+void show_all_booking(int conn_fd){
+	struct_booking response;int moreflg;
+	if(write(conn_fd, &CURRENT_USER.acc_no, sizeof(int))==-1)	ERR_EXIT("read()");
+	if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+	moreflg=ntohl(moreflg);
+	printf("Booking No | Booking Account No | Train No | Traveller Name | Age | Seats Booked | Status\n");
+	while(moreflg){
+		if(read(conn_fd, &response, sizeof(struct_booking))==-1)	ERR_EXIT("read()");
+		display_booking(response);
+		if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+		moreflg=ntohl(moreflg);
+	}
+}
+
+void book_ticket(int conn_fd){
+	show_all_train(conn_fd);
+	struct_booking booking;
+	int possibleflg=0;
+	char name[TRAVELLER_LEN];
+	printf("Enter Name: ");
+	scanf(" %[^\n]",name);
+	strcpy(booking.name,name);
+	printf("Enter Age: ");
+	scanf("%d",&booking.age);
+	printf("Enter Train No: ");
+	scanf("%d",&booking.trn_no);
+	printf("Enter number of seats to book: ");
+	scanf("%d",&booking.seats);
+	booking.acc_no=CURRENT_USER.acc_no;
+	if(write(conn_fd, &booking, sizeof(booking)) == -1)	ERR_EXIT("write()");
+	if(read(conn_fd, &possibleflg, sizeof(int)) == -1)	ERR_EXIT("write()");
+
+	if(possibleflg){
+		struct_booking response;
+		if(read(conn_fd, &response, sizeof(struct_booking)) == -1)	ERR_EXIT("write()");
+		printf("Booking has been completed successfully with following details:\n");
+		printf("Booking No | Booking Account No | Train No | Traveller Name | Age | Seats Booked | Status\n");
+		display_booking(response);
+		return;
+	}
+
+	printf("Booking cannot be completed because of either of following reasons:\n");
+	printf("a) Train has been cancelled/ Train number is invalid.Please check in the train list(shown above).\n");
+	printf("b) Requirement of your seats does not meet availability. Please check in the train list(shown above).\n\n");
+}
+
 int menu_user(int conn_fd){
 	printf("1. Book Ticket\n2. View Booking History\n3. Cancel Booking\n4. Exit\n\n");
 	int choice;int option;
 	scanf("%d",&choice);
     	switch(choice){
     		case 1:
+    			option=htonl(choice);
+    			if(write(conn_fd, &option, sizeof(int)) == -1)	ERR_EXIT("write()");
+    			book_ticket(conn_fd);
     			break;
     		case 2:
+    			option=htonl(choice);
+    			if(write(conn_fd, &option, sizeof(int)) == -1)	ERR_EXIT("write()");
+    			show_all_booking(conn_fd);
     			break;
     		case 3:
     			break;
@@ -104,6 +188,8 @@ int menu_user(int conn_fd){
     			sleep(2);
     			break;
     	}
+    printf("\nPress enter to get back to main menu\n");
+    getchar();getchar();
     return 1;
 }
 
@@ -199,10 +285,6 @@ struct_train get_train(){
 	return new;
 }
 
-void display_train(struct_train train){
-	printf(" \t%d \t%s\t \t%d\t\t \t%d\t \t%d\n",train.trn_no,train.trn_name,train.trn_avl_seats,train.trn_book_seats,train.status);
-}
-
 void add_train(int conn_fd){
 	//printf("Inside add_customer\n");  //DELETE
 	struct_train new=get_train();struct_train response;
@@ -211,19 +293,6 @@ void add_train(int conn_fd){
 	printf("Train has been added with following details:\n\n");
 	printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
 	display_train(response);	
-}
-
-void show_all_train(int conn_fd){
-	struct_train response;int moreflg;
-	if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
-	moreflg=ntohl(moreflg);
-	printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
-	while(moreflg){
-		if(read(conn_fd, &response, sizeof(struct_train))==-1)	ERR_EXIT("read()");
-		display_train(response);
-		if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
-		moreflg=ntohl(moreflg);
-	}
 }
 
 void search_train(int conn_fd){
