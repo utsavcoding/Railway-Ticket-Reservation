@@ -16,6 +16,7 @@
 /* Length of variable*/
 #define PASSWORD_LEN 16
 #define USERNAME_LEN 20
+#define TRNAME_LEN 30
 #define PORT_NO 5000
 #define MAX_CUSTOMER 1000
 #define ADMIN_ACC_TYPE 0
@@ -25,6 +26,9 @@
 #define CANCEL 0
 #define S_ADD_CUSTOMER 0
 #define S_DEL_CUSTOMER 1
+#define S_ADD_TRAIN 2
+#define S_DEL_TRAIN 3
+
 
 void ERR_EXIT(const char * msg) {perror(msg);exit(EXIT_FAILURE);}
 
@@ -35,6 +39,14 @@ typedef struct customer{
     char cust_password[PASSWORD_LEN];
     int status;
 }struct_customer;
+
+typedef struct train{
+    int trn_no;
+    char trn_name[TRNAME_LEN];
+    int trn_avl_seats;
+    int trn_book_seats;
+    int status;
+}struct_train;
 
 typedef union semun
 {
@@ -73,6 +85,8 @@ void init_semaphore_set(){
     struct_semap arg;arg.val=1;
     if(semctl(G_SEMID, S_ADD_CUSTOMER, SETVAL, arg) == -1) ERR_EXIT("semctl()");
     if(semctl(G_SEMID, S_DEL_CUSTOMER, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+    if(semctl(G_SEMID, S_ADD_TRAIN, SETVAL, arg) == -1) ERR_EXIT("semctl()");
+    if(semctl(G_SEMID, S_DEL_TRAIN, SETVAL, arg) == -1) ERR_EXIT("semctl()");
 }
 
 /* Holding the semaphore*/
@@ -104,13 +118,13 @@ int check_for_logged(int acc_no){
     return -1;
 }
 
+
 int compare_struct_customer(struct_customer actual,struct_customer input){
     if(actual.status==NORMAL && strcmp(actual.cust_password,input.cust_password)==0 && strcmp(actual.cust_username,input.cust_username)==0
         && strcmp(actual.cust_password,input.cust_password)==0)
         return 1;
     return 0;
 }
-
 
 /*  Implementation of authenticate functionality.
     @return
@@ -248,6 +262,93 @@ void delete_user(int conn_fd){
     if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
 }
 
+struct_train add_train(int conn_fd){
+    struct_train new;int fd;
+    if(read(conn_fd, &new, 1*sizeof(struct_train)) == -1) ERR_EXIT("read()");
+
+    printf("Before entering into critical section.\n");
+    printf("Waiting for lock...\n");
+    wait(S_ADD_TRAIN);
+
+    if((fd = open("train", O_RDWR))==-1)   ERR_EXIT("open()");    
+    lseek(fd, -1*sizeof(struct_train), SEEK_END);
+    struct_train last;
+    if(read(fd, &last, 1*sizeof(struct_train)) == -1) ERR_EXIT("read()");
+    new.trn_no=last.trn_no+1;
+    write(fd, &new, 1*sizeof(new));
+
+    printf("Inside critical section.\n");
+
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file    
+
+    release(S_ADD_TRAIN);
+    return new;
+}
+
+void show_all_train(int conn_fd){
+    int moreflg=htonl(1);int fd;
+    
+    if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");    
+    struct_train actual_trn;
+    while(read(fd,&actual_trn,1*sizeof(struct_train))){
+        if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");
+        if(write(conn_fd, &actual_trn, sizeof(struct_train)) == -1) ERR_EXIT("write()");
+    }
+    moreflg=htonl(0);
+    if(write(conn_fd, &moreflg, sizeof(int)) == -1) ERR_EXIT("write()");        
+        
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void search_train(int conn_fd){
+    int trn_no;int presentflg=0;int fd;
+    if(read(conn_fd, &trn_no, sizeof(int)) == -1) ERR_EXIT("write()");
+    trn_no=ntohl(trn_no);
+    if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");    
+
+    struct_train actual_trn;
+    while(read(fd,&actual_trn,1*sizeof(struct_train))){
+        if(actual_trn.trn_no==trn_no && actual_trn.status==NORMAL){
+            presentflg=1;
+            presentflg=htonl(presentflg);
+            if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+            if(write(conn_fd, &actual_trn, sizeof(struct_train)) == -1) ERR_EXIT("write()");
+            if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+            return;       
+        }
+    }
+    presentflg=htonl(presentflg);
+    if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file                
+}
+
+void delete_train(int conn_fd){
+    int  trn_no;int presentflg=0;int fd;
+    if(read(conn_fd, &trn_no, sizeof(int)) == -1) ERR_EXIT("write()");
+    trn_no=ntohl(trn_no);
+    printf("Before entering into critical section.\n");
+    printf("Waiting for lock...\n");
+    wait(S_DEL_TRAIN);
+    printf("Inside critical section.\n");
+
+    if((fd = open("train", O_RDWR))==-1)   ERR_EXIT("open()"); 
+    struct_train actual_trn;
+    while(read(fd,&actual_trn,1*sizeof(struct_train))){
+        if(actual_trn.trn_no==trn_no && actual_trn.status==NORMAL){
+            presentflg=1;
+            lseek(fd, -1*sizeof(struct_train), SEEK_CUR);
+            actual_trn.status=CANCEL;
+            write(fd, &actual_trn, 1*sizeof(struct_train));            
+            break;
+        }
+    }
+    if(close(fd)==-1) ERR_EXIT("close()");//closing file
+    release(S_DEL_TRAIN);
+    printf("Lock Released\n");
+    presentflg=htonl(presentflg);
+    if(write(conn_fd, &presentflg, sizeof(int)) == -1) ERR_EXIT("write()");
+}
+
 
 void * service(void * fd)
 {
@@ -276,6 +377,19 @@ void * service(void * fd)
         }else if(option==8){
             printf("Inside option 8\n");
             show_all_customer(conn_fd);
+        }else if(option==9){
+            printf("Inside option 9\n");
+            struct_train new=add_train(conn_fd);
+            if(write(conn_fd, &new, sizeof(struct_train)) == -1) ERR_EXIT("write()");
+        }else if(option==10){
+            printf("Inside option 10\n");
+            search_train(conn_fd);
+        }else if(option==11){
+            printf("Inside option 11\n");
+            delete_train(conn_fd);
+        }else if(option==12){
+            printf("Inside option 12\n");
+            show_all_train(conn_fd);
         }else if(option==13){
             break;
         }else{

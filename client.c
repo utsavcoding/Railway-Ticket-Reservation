@@ -12,6 +12,7 @@
 /* Length of variable*/
 #define PASSWORD_LEN 16
 #define USERNAME_LEN 20
+#define TRNAME_LEN 30
 #define PORT_NO 5000
 #define ADMIN_ACC_TYPE 0
 #define NORMAL_ACC_TYPE 1
@@ -28,6 +29,14 @@ typedef struct customer{
 	char cust_password[PASSWORD_LEN];
 	int status;
 }struct_customer;
+
+typedef struct train{
+	int trn_no;
+	char trn_name[TRNAME_LEN];
+	int trn_avl_seats;
+	int trn_book_seats;
+	int status;
+}struct_train;
 
 static struct_customer CURRENT_USER;
 
@@ -178,6 +187,85 @@ void delete_user(int conn_fd){
 	printf("No such record with this account no!!\n\n");	
 }
 
+struct_train get_train(){
+	struct_train new;char train_name[30];
+	printf("Enter train name : ");
+	scanf(" %[^\n]",train_name);
+	strcpy(new.trn_name,train_name);
+	printf("Enter total number of seats :");
+	scanf("%d",&new.trn_avl_seats);
+	new.trn_book_seats=0;
+	new.status=NORMAL;
+	return new;
+}
+
+void display_train(struct_train train){
+	printf(" \t%d \t%s\t \t%d\t\t \t%d\t \t%d\n",train.trn_no,train.trn_name,train.trn_avl_seats,train.trn_book_seats,train.status);
+}
+
+void add_train(int conn_fd){
+	//printf("Inside add_customer\n");  //DELETE
+	struct_train new=get_train();struct_train response;
+	if(write(conn_fd, &new, 1*sizeof(struct_train)) == -1)	ERR_EXIT("write()");
+	if(read(conn_fd, &response, sizeof(struct_train))==-1)	ERR_EXIT("read()");
+	printf("Train has been added with following details:\n\n");
+	printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
+	display_train(response);	
+}
+
+void show_all_train(int conn_fd){
+	struct_train response;int moreflg;
+	if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+	moreflg=ntohl(moreflg);
+	printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
+	while(moreflg){
+		if(read(conn_fd, &response, sizeof(struct_train))==-1)	ERR_EXIT("read()");
+		display_train(response);
+		if(read(conn_fd, &moreflg, sizeof(int))==-1)	ERR_EXIT("read()");
+		moreflg=ntohl(moreflg);
+	}
+}
+
+void search_train(int conn_fd){
+	int trn_no;struct_train response;int presentflg=0;
+
+	printf("Enter Train no: ");
+	scanf("%d",&trn_no);
+	trn_no=htonl(trn_no);
+	if(write(conn_fd, &trn_no, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+
+	if(read(conn_fd, &presentflg, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+	
+	presentflg=ntohl(presentflg);
+	if(presentflg){
+		if(read(conn_fd, &response, sizeof(struct_train))==-1)	ERR_EXIT("read()");
+		printf("     Train No |    Train Name\t     |    Available Seats   |     Booked Seats   |    Status \t\n");
+		display_train(response);
+		return;
+	}
+
+	printf("No such train record with this train no!!\n\n");
+}
+
+void delete_train(int conn_fd){
+	int trn_no;struct_train response;int presentflg=0;
+
+	printf("Enter Train no: ");
+	scanf("%d",&trn_no);
+	trn_no=htonl(trn_no);
+	if(write(conn_fd, &trn_no, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+
+	if(read(conn_fd, &presentflg, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+	
+	presentflg=ntohl(presentflg);
+	if(presentflg){
+		printf("Account has been deleted.\n\n");
+		return;
+	}
+
+	printf("No such train record with this train no!!\n\n");
+}
+
 int menu_admin(int conn_fd){
 	printf("1. Add User\n2. Search User \n3. Delete User\n4. View Users\n");
 	printf("5. Add Train\n6. Search Train \n7. Delete Train\n8. View Trains\n9. Exit\n\n");
@@ -186,8 +274,6 @@ int menu_admin(int conn_fd){
     switch(choice){
     	case 1:
     		option=htonl(choice+4);
-    		/*printf("conn_fd: %d\n",conn_fd); //DELETE
-    		printf("Inside case 1\n");*/
 			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");    		
     		add_customer(conn_fd);
     		break;
@@ -201,21 +287,30 @@ int menu_admin(int conn_fd){
    			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
    			delete_user(conn_fd);
    			break;
-   			break;
     	case 4:
     		option=htonl(choice+4);
-    		/*printf("conn_fd: %d\n",conn_fd); //DELETE
-    		printf("Inside case 1\n");*/
 			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
 			show_all_customer(conn_fd);
     		break;
     	case 5:
+    		option=htonl(choice+4);
+			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");    		
+    		add_train(conn_fd);
     		break;
     	case 6:
+    		option=htonl(choice+4);
+   			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+   			search_train(conn_fd);
     		break;
     	case 7:
+    		option=htonl(choice+4);
+   			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+   			delete_train(conn_fd);
     		break;
     	case 8:
+    		option=htonl(choice+4);
+			if(write(conn_fd, &option, 1*sizeof(int)) == -1)	ERR_EXIT("write()");
+			show_all_train(conn_fd);
     		break;
     	case 9:
     		option=htonl(choice+4);
@@ -300,6 +395,42 @@ void init(int fd) {
 	strcpy(customer.cust_password,"agent1234");
 	write(fd, &customer, 1*sizeof(customer));
 }
+
+void init(int fd) {
+	struct_train train;
+	train.trn_no=1;
+	strcpy(train.trn_name,"JANSHATABDI EXPRESS");
+	train.trn_avl_seats=1400;
+	train.trn_book_seats=0;
+	train.status=NORMAL;
+	write(fd, &train, 1*sizeof(train));
+}
+
+void readfile(){
+	int fd;
+	if((fd = open("train", O_RDONLY))==-1)   ERR_EXIT("open()");
+    struct_train actual_trn;
+    int pos=0;
+    while(read(fd,&actual_trn,(pos+1)*sizeof(struct_train))>0){
+    	printf("%d %s %d %d %d\n",actual_trn.trn_no,actual_trn.trn_name ,actual_trn.trn_avl_seats,actual_trn.trn_book_seats,actual_trn.status);   //DELETE
+    	//pos++;
+    	//lseek(fd, pos*sizeof(struct_customer), SEEK_SET);
+    	sleep(1);
+    }
+    close(fd);
+}
+
+
+void init(int fd) {
+	struct_train train;
+	train.trn_no=1;
+	train.trn_avl_seats=1400;
+	train.trn_book_seats=0;
+	train.status=NORMAL;
+	strcpy(train.trn_name,"JANSHATABDI EXPRESS");
+	write(fd, &train, 1*sizeof(train));
+}
+
 void readfile(){
 	int fd;
 	if((fd = open("customer", O_RDONLY))==-1)   ERR_EXIT("open()");
